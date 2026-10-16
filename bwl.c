@@ -23,15 +23,24 @@ typedef struct{
 char dllpath[1024]; // Full path to this plugin
 char exepath[1024]; // Path to whatever has loaded the plugin
 
+static BOOL memoryLoaded = false; // 被启动器以内存方式加载 (无有效自身路径)
+static BOOL patchDone    = false; // patch() 只允许执行一次
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved){
   int i;
   switch(ul_reason_for_call)
   {
    case DLL_PROCESS_ATTACH:
-     GetModuleFileNameA(hModule, dllpath, sizeof(dllpath));
+     // 内存加载 (StarcraftLauncher 的 MemoryModule) 时自身句柄无效:
+     // GetModuleFileNameA 返回 0, dllpath 保持为空
+     if (GetModuleFileNameA(hModule, dllpath, sizeof(dllpath)) == 0){
+       memoryLoaded = true;
+       dllpath[0] = 0;
+     }
      GetModuleFileNameA(NULL, exepath, sizeof(exepath));
      for(i = strlen(exepath); i > 0 && exepath[i-1] != '\\'; i--);
-     if(strcmpi(&exepath[i], "starcraft.exe") == 0){
+     if(strcmpi(&exepath[i], "starcraft.exe") == 0 && !patchDone){
+       patchDone = true;
        patch();
      }
      return true;
@@ -41,6 +50,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
      break;
   }
   return true;
+}
+
+// StarcraftLauncher 的 SC 侧中枢在 SC 进程内显式调用本导出
+// (常规 DllMain 路径已含 patchDone 守卫, 两种方式不会重复打补丁)
+__declspec(dllexport) void Initialize(){
+  if (!patchDone){
+    patchDone = true;
+    patch();
+  }
 }
 
 __declspec(dllexport) void GetPluginAPI(ExchangeData *Data){
@@ -61,6 +79,10 @@ __declspec(dllexport) BOOL OpenConfig(){
 }
 
 __declspec(dllexport) BOOL ApplyPatchSuspended(HANDLE hProcess, DWORD dwProcessID){
+  // 内存加载模式下自身没有磁盘路径可注入, SC 侧初始化由启动器的
+  // SCBootstrapHub 统一完成 (在 SC 内展开本插件并触发 patch)
+  if (memoryLoaded)
+    return true;
   // Loads this plugin .dll in to StarCraft.exe remotely
   HMODULE hKernel32 = GetModuleHandle("Kernel32");
   void* dllpathRemote = VirtualAllocEx(hProcess, NULL, sizeof(dllpath), MEM_COMMIT, PAGE_READWRITE);
@@ -75,4 +97,3 @@ __declspec(dllexport) BOOL ApplyPatchSuspended(HANDLE hProcess, DWORD dwProcessI
 __declspec(dllexport) BOOL ApplyPatch(HANDLE hProcess, DWORD dwProcessID){
   return true;
 }
-

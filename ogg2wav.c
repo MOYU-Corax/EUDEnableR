@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include <vorbis/codec.h>
 #include <windows.h>
 #include "eudr.h"
